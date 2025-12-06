@@ -13,7 +13,8 @@ from .recorder import (
     check_system_audio_available,
     test_audio_capture
 )
-from .transcriber import MeetingTranscriber, get_available_models, recommend_model
+from .transcriber import MeetingTranscriber, get_available_models, recommend_model, check_api_key
+from .audio_utils import check_ffmpeg
 from .output_formatter import save_transcript, format_timestamp
 
 
@@ -240,7 +241,7 @@ def test_audio(device_id, duration):
 def check(ctx):
     """Check system requirements and configuration.
 
-    Verifies Python, PyTorch, GPU, and audio devices.
+    Verifies FFmpeg, OpenAI API key, and audio devices.
     """
     debug = ctx.obj.get('debug', False)
 
@@ -249,19 +250,29 @@ def check(ctx):
     click.echo("=" * 50 + "\n")
 
     info = get_platform_info()
+    all_ok = True
 
     # Platform
     click.echo(f"Platform: {info['os']} ({info['machine']})")
     click.echo(f"Python:   {info['python_version']}")
-    click.echo(f"PyTorch:  {info.get('torch_version', 'not installed')}")
 
-    # GPU
-    if info.get('mps_available'):
-        click.echo(click.style("GPU:      Apple Silicon (MPS)", fg='green'))
-    elif info.get('cuda_available'):
-        click.echo(click.style(f"GPU:      CUDA ({info.get('cuda_device', 'unknown')})", fg='green'))
+    # FFmpeg
+    click.echo("")
+    if check_ffmpeg():
+        click.echo(click.style("FFmpeg:       OK", fg='green'))
     else:
-        click.echo(click.style("GPU:      Not available (CPU mode)", fg='yellow'))
+        click.echo(click.style("FFmpeg:       NOT FOUND", fg='red'))
+        click.echo("              Install: winget install ffmpeg (Windows)")
+        click.echo("              Install: brew install ffmpeg (macOS)")
+        all_ok = False
+
+    # OpenAI API Key
+    if check_api_key():
+        click.echo(click.style("OpenAI API:   OK (OPENAI_API_KEY set)", fg='green'))
+    else:
+        click.echo(click.style("OpenAI API:   NOT CONFIGURED", fg='red'))
+        click.echo("              Set OPENAI_API_KEY environment variable")
+        all_ok = False
 
     # Audio
     click.echo("")
@@ -270,12 +281,18 @@ def check(ctx):
     else:
         click.echo(click.style("System audio: Not found", fg='yellow'))
         if IS_WINDOWS:
-            click.echo("              Enable 'Stereo Mix' or install WASAPI loopback")
+            click.echo("              Enable 'Stereo Mix' or use VB-Cable")
         elif IS_MAC:
             click.echo("              Install BlackHole: brew install blackhole-2ch")
 
-    # Recommended settings
-    click.echo(f"\nRecommended model: {recommend_model()}")
+    # Summary
+    click.echo("")
+    if all_ok:
+        click.echo(click.style("Ready to transcribe!", fg='green'))
+    else:
+        click.echo(click.style("Some requirements missing (see above)", fg='yellow'))
+
+    click.echo(f"\nModel: {recommend_model()}")
     click.echo("=" * 50 + "\n")
 
     if debug:
