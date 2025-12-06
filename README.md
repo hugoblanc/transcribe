@@ -18,7 +18,7 @@ CLI tool for transcribing meetings with speaker diarization. Captures both your 
 
 ```batch
 # Clone the repo
-git clone https://github.com/YOUR_USERNAME/transcribe.git
+git clone https://github.com/hugoblanc/transcribe.git
 cd transcribe
 
 # Install (double-click or run in terminal)
@@ -37,7 +37,7 @@ transcribe start
 brew install blackhole-2ch ffmpeg portaudio
 
 # Clone and install
-git clone https://github.com/YOUR_USERNAME/transcribe.git
+git clone https://github.com/hugoblanc/transcribe.git
 cd transcribe
 ./install.sh
 
