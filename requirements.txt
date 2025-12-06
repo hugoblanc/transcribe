@@ -1,0 +1,13 @@
+# Audio capture
+sounddevice>=0.4.6
+scipy>=1.11.0
+numpy>=1.24.0
+
+# Transcription
+openai-whisper>=20231117
+
+# CLI
+click>=8.1.0
+
+# Utilities
+tqdm>=4.65.0

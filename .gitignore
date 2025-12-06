@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Project specific
+recordings/
+transcripts/
+logs/
+*.wav
+*.mp3
+*.m4a
+
+# Claude Code
+.claude/
+
+# Environment
+.env
+.env.local
+*.pem
+*.key
