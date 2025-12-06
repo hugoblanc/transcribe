@@ -8,6 +8,7 @@ Supports:
 import sounddevice as sd
 import numpy as np
 from scipy.io import wavfile
+from scipy import signal as scipy_signal
 from datetime import datetime
 from pathlib import Path
 import threading
@@ -21,6 +22,9 @@ from .config import (
     SAMPLE_RATE, CHANNELS, BLOCK_SIZE,
     RECORDINGS_DIR, get_logger
 )
+
+# Target sample rate for Whisper
+WHISPER_SAMPLE_RATE = 16000
 
 
 @dataclass
@@ -41,7 +45,8 @@ class DualAudioRecorder:
     """
 
     def __init__(self, sample_rate: int = SAMPLE_RATE, output_dir: str = None):
-        self.sample_rate = sample_rate
+        self.target_sample_rate = WHISPER_SAMPLE_RATE  # For output files
+        self.recording_sample_rate = sample_rate  # Will be adjusted per device
         self.output_dir = Path(output_dir) if output_dir else RECORDINGS_DIR
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -61,8 +66,12 @@ class DualAudioRecorder:
         self.mic_device: Optional[AudioDevice] = None
         self.system_device: Optional[AudioDevice] = None
 
+        # Actual sample rates used (may differ per device)
+        self.mic_sample_rate: int = sample_rate
+        self.system_sample_rate: int = sample_rate
+
         self.logger.debug(f"Platform: {'Windows' if IS_WINDOWS else 'macOS' if IS_MAC else 'Linux'}")
-        self.logger.debug(f"Sample rate: {sample_rate} Hz")
+        self.logger.debug(f"Target sample rate: {self.target_sample_rate} Hz")
         self.logger.debug(f"Output dir: {self.output_dir}")
 
     def get_all_devices(self) -> List[AudioDevice]:
@@ -182,6 +191,17 @@ class DualAudioRecorder:
             audio_queue.put(indata.copy())
         return callback
 
+    def _get_device_sample_rate(self, device_index: int) -> int:
+        """Get the default sample rate for a device."""
+        try:
+            device_info = sd.query_devices(device_index)
+            default_sr = int(device_info['default_samplerate'])
+            self.logger.debug(f"Device {device_index} default sample rate: {default_sr}")
+            return default_sr
+        except Exception as e:
+            self.logger.warning(f"Could not get sample rate for device {device_index}: {e}")
+            return 44100  # Common fallback
+
     def start_recording(self, mic_index: Optional[int] = None,
                         system_index: Optional[int] = None) -> bool:
         """Start recording from both audio sources.
@@ -254,12 +274,15 @@ class DualAudioRecorder:
             self.system_queue.get()
 
         try:
+            # Get native sample rates for devices
+            self.mic_sample_rate = self._get_device_sample_rate(self.mic_device.index)
+
             # Start microphone stream
-            self.logger.debug(f"Opening mic stream on device {self.mic_device.index}...")
+            self.logger.debug(f"Opening mic stream on device {self.mic_device.index} at {self.mic_sample_rate}Hz...")
             self.mic_stream = sd.InputStream(
                 device=self.mic_device.index,
                 channels=CHANNELS,
-                samplerate=self.sample_rate,
+                samplerate=self.mic_sample_rate,
                 blocksize=BLOCK_SIZE,
                 callback=self._create_callback(self.mic_queue, "Mic")
             )
@@ -268,11 +291,13 @@ class DualAudioRecorder:
 
             # Start system audio stream (if available)
             if self.system_device:
-                self.logger.debug(f"Opening system stream on device {self.system_device.index}...")
+                self.system_sample_rate = self._get_device_sample_rate(self.system_device.index)
+
+                self.logger.debug(f"Opening system stream on device {self.system_device.index} at {self.system_sample_rate}Hz...")
                 self.system_stream = sd.InputStream(
                     device=self.system_device.index,
                     channels=CHANNELS,
-                    samplerate=self.sample_rate,
+                    samplerate=self.system_sample_rate,
                     blocksize=BLOCK_SIZE,
                     callback=self._create_callback(self.system_queue, "System")
                 )
@@ -350,22 +375,43 @@ class DualAudioRecorder:
         # Save microphone audio
         if mic_data:
             mic_audio = np.concatenate(mic_data, axis=0)
+            # Resample to target rate for Whisper if needed
+            if self.mic_sample_rate != self.target_sample_rate:
+                self.logger.debug(f"Resampling mic from {self.mic_sample_rate} to {self.target_sample_rate}")
+                mic_audio = self._resample(mic_audio, self.mic_sample_rate, self.target_sample_rate)
             mic_path = self.output_dir / f"mic_{timestamp}.wav"
-            wavfile.write(str(mic_path), self.sample_rate, mic_audio)
-            duration = len(mic_audio) / self.sample_rate
+            wavfile.write(str(mic_path), self.target_sample_rate, mic_audio)
+            duration = len(mic_audio) / self.target_sample_rate
             print(f"  Microphone: {mic_path.name} ({duration:.1f}s)")
             self.logger.info(f"Saved mic audio: {mic_path} ({duration:.1f}s)")
 
         # Save system audio
         if system_data:
             system_audio = np.concatenate(system_data, axis=0)
+            # Resample to target rate for Whisper if needed
+            if self.system_sample_rate != self.target_sample_rate:
+                self.logger.debug(f"Resampling system from {self.system_sample_rate} to {self.target_sample_rate}")
+                system_audio = self._resample(system_audio, self.system_sample_rate, self.target_sample_rate)
             system_path = self.output_dir / f"system_{timestamp}.wav"
-            wavfile.write(str(system_path), self.sample_rate, system_audio)
-            duration = len(system_audio) / self.sample_rate
+            wavfile.write(str(system_path), self.target_sample_rate, system_audio)
+            duration = len(system_audio) / self.target_sample_rate
             print(f"  System:     {system_path.name} ({duration:.1f}s)")
             self.logger.info(f"Saved system audio: {system_path} ({duration:.1f}s)")
 
         return mic_path, system_path
+
+    def _resample(self, audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
+        """Resample audio to target sample rate."""
+        if orig_sr == target_sr:
+            return audio
+
+        # Calculate number of samples in output
+        num_samples = int(len(audio) * target_sr / orig_sr)
+
+        # Resample using scipy
+        resampled = scipy_signal.resample(audio, num_samples)
+
+        return resampled.astype(audio.dtype)
 
     def get_duration(self) -> float:
         """Get current recording duration in seconds."""
@@ -397,13 +443,16 @@ def test_audio_capture(device_index: int, duration: float = 3.0) -> bool:
     try:
         devices = sd.query_devices()
         dev = devices[device_index]
+        # Use device's native sample rate
+        device_sr = int(dev['default_samplerate'])
         print(f"\nTesting: [{device_index}] {dev['name']}")
+        print(f"Sample rate: {device_sr} Hz")
         print(f"Recording for {duration} seconds...")
 
         with sd.InputStream(
             device=device_index,
             channels=1,
-            samplerate=SAMPLE_RATE,
+            samplerate=device_sr,
             blocksize=BLOCK_SIZE,
             callback=callback
         ):
