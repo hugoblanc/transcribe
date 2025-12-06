@@ -86,33 +86,41 @@ class MeetingTranscriber:
                         timestamp_granularities=["segment"]
                     )
                 else:
-                    # gpt-4o-transcribe models
+                    # gpt-4o-transcribe models - use text format (no segments)
                     response = self.client.audio.transcriptions.create(
                         model=self.model_name,
                         file=audio_file,
-                        language=language,
-                        response_format="verbose_json"
+                        language=language
                     )
 
-            # Process segments
+            # Process response
             if hasattr(response, 'segments') and response.segments:
+                # Whisper-1 with verbose_json returns segments
                 for seg in response.segments:
                     all_segments.append({
                         "start": seg.start + time_offset,
                         "end": seg.end + time_offset,
                         "text": seg.text.strip()
                     })
-                # Update offset for next chunk
                 if response.segments:
                     time_offset = all_segments[-1]["end"]
             else:
-                # No segments, just full text
-                all_segments.append({
-                    "start": time_offset,
-                    "end": time_offset + 60,  # Estimate
-                    "text": response.text.strip()
-                })
-                time_offset += 60
+                # gpt-4o models return just text
+                text = response.text if hasattr(response, 'text') else str(response)
+                text = text.strip()
+                if text:
+                    # Estimate duration from file
+                    from .audio_utils import get_audio_duration
+                    duration = get_audio_duration(file_path)
+                    if duration <= 0:
+                        duration = 60  # Fallback
+
+                    all_segments.append({
+                        "start": time_offset,
+                        "end": time_offset + duration,
+                        "text": text
+                    })
+                    time_offset += duration
 
         return {
             "text": " ".join(seg["text"] for seg in all_segments),
